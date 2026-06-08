@@ -6,9 +6,7 @@
 <title>Control Financiero — Poliblak</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+
 <style>
 /* ============================================
    POLIBLAK FINANCE — DROPSTAB-INSPIRED DESIGN
@@ -931,31 +929,41 @@ function initSupabase() {
   }
   if (SUPA_URL && SUPA_KEY) {
     try {
-      supabase = window.supabase.createClient(SUPA_URL, SUPA_KEY);
-      return true;
-    } catch(e) { supabase = null; return false; }
+      // UMD build exposes as window.supabase.createClient
+      const sb = window.supabase || window.Supabase;
+      if (sb && sb.createClient) {
+        supabase = sb.createClient(SUPA_URL, SUPA_KEY);
+        return true;
+      }
+    } catch(e) { console.warn('Supabase init error:', e); supabase = null; return false; }
   }
   return false;
 }
 
 async function loadData() {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .order('date', { ascending: false });
-      if (error) throw error;
-      ALL = data || [];
-      document.getElementById('configBanner').classList.add('hidden');
-    } catch(e) {
-      console.warn('Supabase error:', e);
+  try {
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('transactions')
+          .select('*')
+          .order('date', { ascending: false });
+        if (error) throw error;
+        ALL = data || [];
+        const banner = document.getElementById('configBanner');
+        if (banner) banner.classList.add('hidden');
+      } catch(e) {
+        console.warn('Supabase error:', e);
+        ALL = loadLocal();
+        showBanner();
+      }
+    } else {
       ALL = loadLocal();
       showBanner();
     }
-  } else {
+  } catch(e) {
+    console.error('loadData error:', e);
     ALL = loadLocal();
-    showBanner();
   }
   buildYears();
   render();
@@ -973,7 +981,8 @@ function saveLocal(rows) {
 }
 
 function showBanner() {
-  document.getElementById('configBanner').classList.remove('hidden');
+  const el = document.getElementById('configBanner');
+  if (el) el.classList.remove('hidden');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1279,13 +1288,15 @@ function renderDashboard(stats, rows) {
   cats.forEach(c => { const o = document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o); });
 
   // Render sub-components
-  setTimeout(() => {
-    renderCharts(stats);
-    renderCatBars(stats);
-    renderSavGrid(stats);
-    renderMonthlyTable(stats);
-    renderTx();
-  }, 30);
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      try { renderCharts(stats); } catch(e) { console.warn('Charts error:', e); }
+      try { renderCatBars(stats); } catch(e) { console.warn('CatBars error:', e); }
+      try { renderSavGrid(stats); } catch(e) { console.warn('SavGrid error:', e); }
+      try { renderMonthlyTable(stats); } catch(e) { console.warn('MonthlyTable error:', e); }
+      try { renderTx(); } catch(e) { console.warn('Tx error:', e); }
+    }, 80);
+  });
 }
 
 // ── KPI Card ──────────────────────────────
@@ -1317,6 +1328,7 @@ Chart.defaults.font.family = "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 10;
 
 function renderCharts(stats) {
+  if (typeof Chart === 'undefined') { console.warn('Chart.js not loaded'); return; }
   const labels = MONTHS.map(m=>m.substr(0,3));
   const inc = stats.months.map(m=>m.ingresos);
   const exp = stats.months.map(m=>m.gastos);
@@ -1373,7 +1385,7 @@ function renderCharts(stats) {
         datalabels:{ color:'#fff', font:{size:10,weight:'bold'},
           formatter:(v,ctx) => { const t=ctx.dataset.data.reduce((a,b)=>a+b,0); return t?(v/t*100).toFixed(0)+'%':''; } } }
     },
-    plugins:[ChartDataLabels]
+    plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels] : []
   });
 }
 
@@ -1643,7 +1655,8 @@ function saveConfig() {
   localStorage.setItem('poliblak_cfg', JSON.stringify({url,key}));
   SUPA_URL = url; SUPA_KEY = key;
   try {
-    supabase = window.supabase.createClient(url, key);
+    const sb = window.supabase || window.Supabase;
+    supabase = sb.createClient(url, key);
     toast('✅ Supabase conectado. Cargando datos...', 'success');
     closeModal('config');
     loadData();
@@ -1672,8 +1685,10 @@ function closeModal(type) {
 }
 
 // Close on overlay click
-document.querySelectorAll('.overlay').forEach(el => {
-  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.overlay').forEach(el => {
+    el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+  });
 });
 
 function today() {
@@ -1707,10 +1722,47 @@ function toast(msg, type='success') {
 }
 
 // ══════════════════════════════════════════════════════════
-//  BOOT
+//  EXPOSE TO WINDOW (required for inline onclick handlers)
 // ══════════════════════════════════════════════════════════
-initSupabase();
-loadData();
+window.openModal   = openModal;
+window.closeModal  = closeModal;
+window.submitForm  = submitForm;
+window.deleteRow   = deleteRow;
+window.saveConfig  = saveConfig;
+window.setYear     = setYear;
+window.onTxFilter  = onTxFilter;
+window.goTxPage    = goTxPage;
+window.loadDemoData = loadDemoData;
+
+// ══════════════════════════════════════════════════════════
+//  BOOT — waits for all scripts to load dynamically
+// ══════════════════════════════════════════════════════════
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    // Check if already loaded
+    if (document.querySelector(`script[src="${src}"]`) && window.Chart) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => { console.warn('Failed to load:', src); resolve(); }; // resolve anyway
+    document.head.appendChild(s);
+  });
+}
+
+async function boot() {
+  // Load libs sequentially so dependencies are respected
+  await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js');
+  await loadScript('https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js');
+  initSupabase();
+  await loadData();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
 </script>
 </body>
 </html>
